@@ -1,0 +1,19 @@
+flask
+pandas
+requests
+flask_cors
+langchain-openai
+langgraph
+geopy
+msal
+python-dotenv
+openpyxl
+openrouteservice
+pyarrow
+tabulate
+Flask-Session    # Alternative database connector
+lxml      # For better XML parsing
+pymongo
+langchain
+openai
+langchain-mongodb

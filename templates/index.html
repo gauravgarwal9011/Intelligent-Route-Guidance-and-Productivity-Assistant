@@ -1,0 +1,256 @@
+<!-- templates/index.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Intelligent Client Outreach Agent</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.7.1/dist/leaflet.css"/>
+  <style>
+    body { font-family: 'Inter', sans-serif; }
+    #map { height: 400px; border-radius: 0.5rem; }
+    .loader { border: 4px solid #f3f3f3; border-radius: 50%; border-top: 4px solid #3498db; width: 24px; height: 24px; animation: spin 2s linear infinite; }
+    @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+    .chat-bubble { max-width: 80%; padding: 10px 15px; border-radius: 20px; margin-bottom: 10px; word-wrap: break-word; }
+    .user-bubble { background-color: #3b82f6; color: white; align-self: flex-end; }
+    .agent-bubble { background-color: #e5e7eb; color: #1f2937; align-self: flex-start; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { border: 1px solid #ddd; padding: 8px; text-align: left; }
+    th { background-color: #f2f2f2; }
+    pre { background-color: #f4f4f4; padding: 1rem; border-radius: 0.5rem; white-space: pre-wrap; word-wrap: break-word; }
+  </style>
+</head>
+<body class="bg-gray-100 text-gray-800">
+
+<div class="container mx-auto p-4 md:p-8">
+  <header class="text-center mb-8">
+    <h1 class="text-3xl md:text-4xl font-bold text-gray-900">Intelligent Client Outreach Agent</h1>
+    <p class="text-md text-gray-600 mt-2">Ask me to find clients, get insights, and more.</p>
+    <button id="login-btn" class="mt-4 bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded">
+      Login with Outlook
+    </button>
+    <p id="login-status" class="text-sm text-green-600 mt-2 hidden">Successfully logged in!</p>
+  </header>
+
+  <main class="bg-white p-6 rounded-lg shadow-lg">
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <!-- Chat -->
+      <div class="flex flex-col h-[600px] border rounded-lg">
+        <div id="chat-box" class="flex-1 p-4 overflow-y-auto flex flex-col">
+          <div class="agent-bubble chat-bubble">
+            Hello! How can I help you today? Please log in with Outlook to access all features.
+          </div>
+        </div>
+        <div id="loader" class="hidden p-4 flex justify-center items-center">
+          <div class="loader"></div>
+          <p class="ml-2 text-gray-500">Agent is thinking...</p>
+        </div>
+        <form id="chat-form" class="p-4 border-t">
+          <div class="flex items-center">
+            <input type="text" id="user-input" class="flex-1 block w-full px-3 py-2 bg-white border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-indigo-500 focus:border-indigo-500" placeholder="Type your message..." required>
+            <button type="submit" class="ml-3 inline-flex justify-center py-2 px-4 border border-transparent shadow-sm text-sm font-medium rounded-md text-white bg-indigo-600 hover:bg-indigo-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500">Send</button>
+          </div>
+        </form>
+      </div>
+
+      <!-- Map + Clients -->
+      <div>
+        <div id="map" class="mb-6 shadow-md"></div>
+        <h3 class="text-xl font-semibold mb-4">Discovered Clients</h3>
+        <div id="client-list" class="space-y-4 h-64 overflow-y-auto">
+          <p class="text-center text-gray-500">Client details will appear here.</p>
+        </div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.7.1/dist/leaflet.js"></script>
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+  const chatForm = document.getElementById('chat-form');
+  const userInput = document.getElementById('user-input');
+  const chatBox = document.getElementById('chat-box');
+  const loader = document.getElementById('loader');
+  const clientList = document.getElementById('client-list');
+  const loginBtn = document.getElementById('login-btn');
+  const loginStatus = document.getElementById('login-status');
+  let map;
+
+  // --- Stable client-side session id for LangChain memory ---
+  let chatSessionId = localStorage.getItem('chat_session_id');
+  if (!chatSessionId) {
+    chatSessionId = crypto.randomUUID();
+    localStorage.setItem('chat_session_id', chatSessionId);
+  }
+
+  function initMap() {
+    if (map) map.remove();
+    map = L.map('map').setView([39.8283, -98.5795], 4);
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+    }).addTo(map);
+  }
+  initMap();
+
+  // Login
+  loginBtn.addEventListener('click', () => {
+    window.open('/login', 'Outlook Login', 'width=600,height=700');
+  });
+  window.addEventListener('message', (event) => {
+    if (event.data === 'login_successful') {
+      loginStatus.classList.remove('hidden');
+      loginBtn.style.display = 'none';
+    }
+  }, false);
+
+  // Chat submit
+  chatForm.addEventListener('submit', function(e) {
+    e.preventDefault();
+    const query = userInput.value.trim();
+    if (!query) return;
+    appendMessage(query, 'user');
+    userInput.value = '';
+    loader.classList.remove('hidden');
+
+    fetch('/invoke_agent', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ query: query, session_id: chatSessionId }),
+      credentials: 'include'
+    })
+    .then(r => r.json())
+    .then(data => {
+      loader.classList.add('hidden');
+      if (data.error) {
+        appendMessage(`Error: ${data.error}`, 'agent');
+        return;
+      }
+      handleAgentResponse(data.response);
+    })
+    .catch(err => {
+      loader.classList.add('hidden');
+      console.error(err);
+      appendMessage('An unexpected error occurred.', 'agent');
+    });
+  });
+
+  function appendMessage(text, sender, isHtml=false) {
+    const bubble = document.createElement('div');
+    bubble.className = `chat-bubble ${sender}-bubble`;
+    if (isHtml) bubble.innerHTML = text; else bubble.textContent = text;
+    chatBox.appendChild(bubble);
+    chatBox.scrollTop = chatBox.scrollHeight;
+  }
+
+  function handleAgentResponse(response) {
+    try {
+      const data = JSON.parse(response);
+      if (data.clients_df_json) {
+        const clients = JSON.parse(data.clients_df_json);
+        const llmSummary = data.llm_summary || {};
+        displayClients(clients);
+        if (data.route) drawRoute(data.route, clients);
+        if (llmSummary.clients_table) appendMessage(llmSummary.clients_table.replace(/\n/g, '<br>'), 'agent', true);
+        if (llmSummary.message) appendMessage(llmSummary.message, 'agent');
+      } else if (data.summary && data.matches) {
+        appendMessage(`<pre>${JSON.stringify(data.matches, null, 2)}</pre>`, 'agent', true);
+        appendMessage(data.summary, 'agent');
+      } else if (data.Draft_Email) {
+        appendMessage(`<pre>${JSON.stringify(data, null, 2)}</pre>`, 'agent', true);
+      } else if (data.emails && data.summary) {
+        appendMessage(`<pre>${JSON.stringify(data.emails, null, 2)}</pre>`, 'agent', true);
+        appendMessage(data.summary, 'agent');
+      } else {
+        appendMessage(response, 'agent');
+      }
+    } catch (e) {
+      appendMessage(response, 'agent');
+    }
+  }
+
+  function displayClients(clients) {
+    clientList.innerHTML = '';
+    if (!clients.length) {
+        clientList.innerHTML = '<p class="text-center text-gray-500">No clients found.</p>';
+        return;
+    }
+
+    // Create table with updated headers
+    const table = document.createElement('table');
+    table.className = 'w-full border-collapse border border-gray-300';
+    
+    const thead = document.createElement('thead');
+    const tbody = document.createElement('tbody');
+    
+    // Updated headers to include the fields you want
+    const headers = ['Municipality', 'County', 'State', 'CFO', 'Mayor', 'Administrator', 'Distance (km)'];
+    
+    const headerRow = document.createElement('tr');
+    headerRow.className = 'bg-gray-100';
+    
+    headers.forEach(h => {
+        const th = document.createElement('th');
+        th.className = 'border border-gray-300 px-4 py-2 text-left font-semibold';
+        th.textContent = h;
+        headerRow.appendChild(th);
+    });
+    
+    thead.appendChild(headerRow);
+    table.appendChild(thead);
+
+    // Create rows with the new data fields
+    clients.forEach(client => {
+        const tr = document.createElement('tr');
+        tr.className = 'hover:bg-gray-50';
+        
+        // Create cells for each field
+        const cells = [
+        client.Name || client.Municipality || 'N/A',           // Municipality
+        client.County || 'N/A',                                // County
+        client.State || 'N/A',                                 // State
+        client.CFO || 'N/A',                                   // CFO
+        client.Mayor || 'N/A',                                 // Mayor
+        client.Administrator || 'N/A',                         // Administrator
+        client.distance_km !== undefined ? client.distance_km : 'N/A'  // Distance
+        ];
+        
+        cells.forEach(cellContent => {
+        const td = document.createElement('td');
+        td.className = 'border border-gray-300 px-4 py-2';
+        td.textContent = cellContent;
+        tr.appendChild(td);
+        });
+        
+        tbody.appendChild(tr);
+    });
+
+    table.appendChild(tbody);
+    clientList.appendChild(table);
+  }
+
+  function drawRoute(routeGeometry, clients) {
+    initMap();
+    const latLngs = routeGeometry.map(c => [c[1], c[0]]);
+    const polyline = L.polyline(latLngs, { color: 'blue', weight: 4 }).addTo(map);
+    const markers = [];
+    clients.forEach(c => {
+      if (c.coords && c.coords.length === 2) {
+        const m = L.marker([c.coords[1], c.coords[0]])
+          .bindPopup(`<b>${c.Name}</b><br>${c.County || ''}, ${c.State || ''}<br>Distance: ${c.distance_km ?? 'N/A'} km`)
+          .addTo(map);
+        markers.push(m);
+      }
+    });
+    if (markers.length > 0) {
+      const group = L.featureGroup([...markers, polyline]).addTo(map);
+      map.fitBounds(group.getBounds().pad(0.1));
+    } else {
+      map.fitBounds(polyline.getBounds());
+    }
+  }
+});
+</script>
+</body>
+</html>
